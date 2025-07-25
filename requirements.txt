@@ -3,3 +3,4 @@ pandas
 matplotlib
 textblob
 nltk
+scikit-learn

@@ -140,11 +140,16 @@ elif choice == "Analyze" and st.session_state.logged_in:
                 if st.button("Run Analysis for All Users"):
                     for uname in unique_users:
                         user_data = df[df['username'] == uname]
-                        posts = user_data['post_text'].tolist()
-                        timestamps = user_data['timestamp'].tolist()
+                        posts = user_data['post_text'].dropna().tolist()
+                        timestamps = user_data['timestamp'].dropna().tolist()
+                        
+                        if len(posts) == 0:
+                            st.warning(f"Skipping user '{uname}' because no valid posts were found.")
+                            continue
+                        
                         sentiment, keywords, flagged, recommendation, sentiments = analyze_posts(posts)
-
                         log_analysis(uname, sentiment, keywords, flagged, recommendation)
+
 
                     st.success("Sentiment analysis completed for all users and saved to history.")
         except Exception as e:

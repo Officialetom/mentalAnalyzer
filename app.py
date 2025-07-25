@@ -170,6 +170,12 @@ elif choice == "History" and st.session_state.logged_in:
         # Display table
         st.subheader("🗃️ Full Log History")
         st.dataframe(df_logs)
+        
+        if st.button("🗑️ Clear All Analysis History"):
+            cursor.execute("DELETE FROM logs")
+            conn.commit()
+            st.success("All analysis history has been cleared.")
+            st.rerun()
 
         # User selection for trend visualization
         selected_user = st.selectbox("📌 Select a user to visualize emotional trends:", df_logs['Username'].unique())

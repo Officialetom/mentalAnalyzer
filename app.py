@@ -110,6 +110,7 @@ elif choice == "Login":
             st.success(f"Welcome {username}!")
             st.session_state.logged_in = True
             st.session_state.username = username
+            st.rerun()
         else:
             st.error("Invalid username or password")
 

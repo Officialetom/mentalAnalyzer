@@ -1,0 +1,6 @@
+streamlit
+pandas
+matplotlib
+textblob
+nltk
+sqlite3  # Note: This is built-in with Python; listed here for completeness

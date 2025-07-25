@@ -1,108 +1,91 @@
-# --- Streamlit Version of Mental Health Post Analyzer (With Upload + Navigation + Objectives Reflected) ---
-
 import streamlit as st
-import sqlite3
 import pandas as pd
+import sqlite3
 from textblob import TextBlob
-from collections import Counter
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 from datetime import datetime
-import nltk
-nltk.download('punkt')
+import hashlib
+import re
 
-# --- Database Setup ---
+# ---------- DATABASE SETUP ----------
 conn = sqlite3.connect('users.db', check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS users (
-    username TEXT PRIMARY KEY,
-    password TEXT NOT NULL
-)''')
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS logs (
-    username TEXT,
-    date TEXT,
-    sentiment REAL,
-    keywords TEXT,
-    flagged INTEGER,
-    recommendation TEXT
-)''')
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS analysis_logs (username TEXT, sentiment REAL, keywords TEXT, flagged INTEGER, recommendation TEXT, timestamp TEXT)''')
 conn.commit()
 
-# --- Analyzer Functions ---
-def analyze_posts(posts):
-    all_text = " ".join(posts)
-    keywords = Counter(all_text.split()).most_common(5)
-    sentiments = [TextBlob(post).sentiment.polarity for post in posts]
-    average_sentiment = sum(sentiments) / len(sentiments)
-    flagged = average_sentiment < -0.2
-    recommendation = "Consider reaching out for support." if flagged else "Keep monitoring your mood."
-    return average_sentiment, keywords, flagged, recommendation, sentiments
+# ---------- UTILITY FUNCTIONS ----------
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-# --- Chart Function ---
-def show_sentiment_chart(timestamps, sentiments):
-    dates = [datetime.strptime(t, "%Y-%m-%d") for t in timestamps]
-    fig, ax = plt.subplots()
-    ax.plot(dates, sentiments, marker='o', linestyle='-')
-    ax.set_title('Sentiment Trend Over Time')
-    ax.set_xlabel('Date')
-    ax.set_ylabel('Sentiment Polarity')
-    ax.grid(True)
-    st.pyplot(fig)
-
-# --- Save to Logs ---
-def log_analysis(username, sentiment, keywords, flagged, recommendation):
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    keyword_str = ", ".join([kw[0] for kw in keywords])
-    cursor.execute('''INSERT INTO logs (username, date, sentiment, keywords, flagged, recommendation)
-                      VALUES (?, ?, ?, ?, ?, ?)''',
-                   (username, date, sentiment, keyword_str, int(flagged), recommendation))
-    conn.commit()
-
-# --- User Authentication ---
 def register_user(username, password):
+    hashed = hash_password(password)
     try:
-        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except:
         return False
 
 def authenticate_user(username, password):
-    cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
-    return cursor.fetchone() is not None
+    hashed = hash_password(password)
+    c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, hashed))
+    return c.fetchone() is not None
 
-# --- Streamlit App ---
-st.set_page_config(page_title="Mental Health Post Analyzer", layout="centered")
+def extract_keywords(texts):
+    vectorizer = CountVectorizer(stop_words='english')
+    X = vectorizer.fit_transform(texts)
+    sums = X.sum(axis=0)
+    keywords = [(word, sums[0, idx]) for word, idx in vectorizer.vocabulary_.items()]
+    return sorted(keywords, key=lambda x: x[1], reverse=True)[:5]
+
+def analyze_posts(posts):
+    sentiments = [TextBlob(post).sentiment.polarity for post in posts]
+    avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
+    keywords = extract_keywords(posts)
+    flagged = avg_sentiment < -0.2
+    recommendation = "Needs urgent attention" if flagged else "Monitor periodically"
+    return avg_sentiment, keywords, flagged, recommendation, sentiments
+
+def log_analysis(username, sentiment, keywords, flagged, recommendation):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT INTO analysis_logs VALUES (?, ?, ?, ?, ?, ?)",
+              (username, sentiment, ','.join([kw[0] for kw in keywords]), int(flagged), recommendation, timestamp))
+    conn.commit()
+
+def show_sentiment_chart(user, timestamps, sentiments):
+    fig, ax = plt.subplots()
+    ax.plot(timestamps, sentiments, marker='o')
+    ax.set_title(f"Sentiment Over Time for {user}")
+    ax.set_xlabel("Timestamp")
+    ax.set_ylabel("Sentiment")
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+# ---------- STREAMLIT APP ----------
 st.title("🧠 Mental Health Post Analyzer")
 
-# --- Session State ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ""
 
-# --- Navigation Menu ---
-if st.session_state.logged_in:
-    menu = ["Home", "Prediction", "History", "Logout"]
-else:
-    menu = ["Login", "Register"]
+menu = ["Login", "Register"] if not st.session_state.logged_in else ["Home", "Prediction", "History", "Logout"]
+choice = st.sidebar.selectbox("Navigation", menu)
 
-choice = st.sidebar.selectbox("Menu", menu)
-
-# --- Registration Page ---
 if choice == "Register":
     st.subheader("Create New Account")
     new_user = st.text_input("Username")
-    new_password = st.text_input("Password", type='password')
+    new_pass = st.text_input("Password", type='password')
     if st.button("Register"):
-        if register_user(new_user, new_password):
-            st.success("Account created successfully! Go to Login.")
+        if register_user(new_user, new_pass):
+            st.success("Account created! Please login.")
         else:
             st.error("Username already exists.")
 
-# --- Login Page ---
 elif choice == "Login":
-    st.subheader("Login to your account")
+    st.subheader("Login")
     username = st.text_input("Username")
     password = st.text_input("Password", type='password')
     if st.button("Login"):
@@ -112,27 +95,22 @@ elif choice == "Login":
             st.session_state.username = username
             st.rerun()
         else:
-            st.error("Invalid username or password")
+            st.error("Invalid credentials.")
 
-# --- Home Page (Aim & Objectives) ---
+elif choice == "Logout":
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.success("Logged out successfully.")
+    st.experimental_rerun()
+
 elif choice == "Home":
-    st.subheader("🎯 Aim and Objectives of Study")
-    st.markdown("""
-    **Aim:**  
-    The aim of this study is to assess and compare data mining techniques in detecting early signs of mental health issues from social media activities.
+    st.subheader("Dashboard")
+    st.write(f"Logged in as **{st.session_state.username}**")
+    st.write("Welcome to the Mental Health Post Analyzer. Upload posts and analyze user sentiment.")
 
-    **Objectives:**  
-    1. To extract and preprocess mental health-relevant data from social media platforms.  
-    2. To apply and evaluate data mining classification techniques such as Logistic Regression, Naïve Bayes, SVM, Random Forest, Gradient Boosting for identifying early warning signs.  
-    3. To compare the performance of these techniques in terms of accuracy, precision, recall, F1-score, and ROC-AUC.  
-    4. To recommend the most effective data mining technique for early detection of mental health issues via social media activities.
-    """)
-
-# --- Prediction Page ---
 elif choice == "Prediction":
-    st.subheader("📊 Analyze Your Mental Health Posts")
-
-    uploaded_file = st.file_uploader("📄 Upload CSV File (with 'username', 'post_text', 'timestamp')", type="csv")
+    st.subheader("Upload and Analyze Posts (All Users)")
+    uploaded_file = st.file_uploader("📄 Upload CSV File", type="csv")
 
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
@@ -140,70 +118,44 @@ elif choice == "Prediction":
         st.write("✅ Uploaded Data Preview:")
         st.dataframe(df.head())
 
-        if 'username' not in df.columns or 'post_text' not in df.columns or 'timestamp' not in df.columns:
-            st.error("❌ CSV must contain columns: 'username', 'post_text', 'timestamp'")
+        required_columns = {'username', 'post_text', 'timestamp'}
+        if not required_columns.issubset(df.columns):
+            st.error("CSV must contain: 'username', 'post_text', 'timestamp'")
         else:
-            user_data = df[df['username'] == st.session_state.username]
-            user_posts = user_data['post_text'].tolist()
-            timestamps = user_data['timestamp'].tolist()
-            
+            grouped = df.groupby('username')
+            results = []
+
             if st.button("Run Analysis"):
-                if not user_posts:
-                    st.warning("No posts found for this user.")
-                else:
-                    # Reflect Objective 2
-                    st.info("Applying basic NLP model (TextBlob) for sentiment classification...")
+                for username, group in grouped:
+                    posts = group['post_text'].tolist()
+                    timestamps = group['timestamp'].tolist()
 
-                    sentiment, keywords, flagged, recommendation, sentiments = analyze_posts(user_posts)
+                    sentiment, keywords, flagged, recommendation, sentiments = analyze_posts(posts)
+                    results.append({
+                        "Username": username,
+                        "Num Posts": len(posts),
+                        "Sentiment": round(sentiment, 2),
+                        "Top Keywords": ", ".join([kw[0] for kw in keywords]),
+                        "Flagged": "Yes" if flagged else "No",
+                        "Recommendation": recommendation
+                    })
 
-                    # Reflect Objective 1
-                    st.write(f"**Step 1 (Extracted Posts):** {len(user_posts)} posts found.")
-                    st.write(f"**Step 2 (Sentiment Score):** {sentiment:.2f}")
-                    st.write(f"**Step 3 (Top Keywords):** {', '.join([kw[0] for kw in keywords])}")
-                    st.write(f"**Step 4 (Flagged):** {'Yes' if flagged else 'No'}")
-                    st.write(f"**Step 5 (Recommendation):** {recommendation}")
+                    if username == st.session_state.username:
+                        log_analysis(username, sentiment, keywords, flagged, recommendation)
 
-                    # Reflect Objective 3 (Evaluation Placeholder)
-                    st.markdown("**🔍 Model Evaluation (Placeholder):**")
-                    st.table(pd.DataFrame({
-                        "Model": ["TextBlob (baseline)"],
-                        "Accuracy": ["N/A"],
-                        "Precision": ["N/A"],
-                        "Recall": ["N/A"],
-                        "F1-Score": ["N/A"],
-                        "ROC-AUC": ["N/A"]
-                    }))
+                    show_sentiment_chart(username, timestamps, sentiments)
 
-                    # Reflect Objective 4
-                    st.success("✔️ Based on the sentiment analysis, the model has provided a recommendation above.")
+                result_df = pd.DataFrame(results)
+                st.success("✔️ Analysis complete for all users.")
+                st.dataframe(result_df)
+                st.download_button("Download Results", result_df.to_csv(index=False), file_name="all_user_analysis.csv")
 
-                    show_sentiment_chart(timestamps, sentiments)
-                    log_analysis(st.session_state.username, sentiment, keywords, flagged, recommendation)
-
-                    if st.button("Export Result"):
-                        with open("analysis_result.txt", "w") as file:
-                            file.write(f"User: {st.session_state.username}\n")
-                            file.write(f"Sentiment Score: {sentiment:.2f}\n")
-                            file.write(f"Top Keywords: {', '.join([kw[0] for kw in keywords])}\n")
-                            file.write(f"Flagged: {'Yes' if flagged else 'No'}\n")
-                            file.write(f"Recommendation: {recommendation}\n")
-                        st.success("Result exported to analysis_result.txt")
-
-# --- History Page ---
 elif choice == "History":
-    st.subheader("📜 Analysis History")
-    cursor.execute("SELECT * FROM logs WHERE username=?", (st.session_state.username,))
-    data = cursor.fetchall()
-    if data:
-        df = pd.DataFrame(data, columns=["Username", "Date", "Sentiment", "Keywords", "Flagged", "Recommendation"])
+    st.subheader("Analysis History")
+    c.execute("SELECT * FROM analysis_logs WHERE username=?", (st.session_state.username,))
+    logs = c.fetchall()
+    if logs:
+        df = pd.DataFrame(logs, columns=["Username", "Sentiment", "Keywords", "Flagged", "Recommendation", "Timestamp"])
         st.dataframe(df)
-        st.download_button("Download CSV", df.to_csv(index=False), file_name="history.csv")
     else:
-        st.info("No analysis history found.")
-
-# --- Logout Page ---
-elif choice == "Logout":
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.success("You have been logged out.")
-    st.experimental_rerun()
+        st.info("No past analysis found.")

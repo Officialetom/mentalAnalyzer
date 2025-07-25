@@ -150,17 +150,41 @@ elif choice == "Analyze" and st.session_state.logged_in:
         except Exception as e:
             st.error(f"Error processing file: {e}")
 
-# --- History Page ---
+# --- History Page with Trend Visualization ---
 elif choice == "History" and st.session_state.logged_in:
     st.title("📂 Analysis History")
-    cursor.execute("SELECT * FROM logs ORDER BY date DESC")
+
+    # Load all logs
+    cursor.execute("SELECT * FROM logs ORDER BY date ASC")
     records = cursor.fetchall()
 
     if records:
         df_logs = pd.DataFrame(records, columns=["Username", "Date", "Sentiment", "Keywords", "Flagged", "Recommendation"])
+        df_logs['Date'] = pd.to_datetime(df_logs['Date'])  # Ensure datetime format
+
+        # Display table
+        st.subheader("🗃️ Full Log History")
         st.dataframe(df_logs)
+
+        # User selection for trend visualization
+        selected_user = st.selectbox("📌 Select a user to visualize emotional trends:", df_logs['Username'].unique())
+
+        user_data = df_logs[df_logs['Username'] == selected_user]
+
+        if not user_data.empty:
+            st.subheader(f"📈 Emotional Trend for **{selected_user}**")
+            fig, ax = plt.subplots()
+            ax.plot(user_data['Date'], user_data['Sentiment'], marker='o', linestyle='-', color='blue')
+            ax.set_title(f'Sentiment Trend for {selected_user}')
+            ax.set_xlabel('Date')
+            ax.set_ylabel('Sentiment Polarity')
+            ax.grid(True)
+            st.pyplot(fig)
+        else:
+            st.warning("No sentiment history available for this user.")
     else:
         st.info("No analysis history found.")
+
 
 # --- Logout ---
 elif choice == "Logout" and st.session_state.logged_in:
